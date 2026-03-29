@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Chess Master AI</title>
+  <meta name="description" content="Play chess against an AI opponent with adjustable difficulty levels.">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <header id="header">
+      <div class="header-left">
+        <h1>♚ Chess Master</h1>
+      </div>
+      <div class="header-right">
+        <div class="control-group">
+          <label for="difficulty-select">Difficulty</label>
+          <select id="difficulty-select">
+            <option value="1">1 — Random</option>
+            <option value="2">2 — Greedy</option>
+            <option value="3" selected>3 — Tactical</option>
+            <option value="4">4 — Strategic</option>
+            <option value="5">5 — Master</option>
+          </select>
+        </div>
+        <div class="control-group">
+          <label for="color-select">Play as</label>
+          <select id="color-select">
+            <option value="w">White</option>
+            <option value="b">Black</option>
+          </select>
+        </div>
+        <div class="control-group">
+          <label for="theme-select">Theme</label>
+          <select id="theme-select">
+            <option value="green" selected>Green</option>
+            <option value="classic">Classic</option>
+            <option value="blue">Blue</option>
+            <option value="purple">Purple</option>
+            <option value="wood">Wood</option>
+          </select>
+        </div>
+      </div>
+    </header>
+
+    <main id="main">
+      <div class="game-column">
+        <div class="info-bar">
+          <div id="captured-top" class="captured-pieces"></div>
+          <div id="score-top" class="score-diff"></div>
+        </div>
+
+        <div class="board-wrapper">
+          <div class="eval-bar" id="eval-bar">
+            <div class="eval-bar-black" id="eval-black"></div>
+            <div class="eval-bar-white" id="eval-white"></div>
+            <span class="eval-bar-label" id="eval-label"></span>
+          </div>
+          <div class="rank-labels" id="rank-labels"></div>
+          <div id="board" class="board"></div>
+        </div>
+        <div class="file-labels-row">
+          <div class="eval-spacer"></div>
+          <div class="rank-spacer"></div>
+          <div class="file-labels" id="file-labels"></div>
+        </div>
+
+        <div class="info-bar">
+          <div id="captured-bottom" class="captured-pieces"></div>
+          <div id="score-bottom" class="score-diff"></div>
+        </div>
+
+        <div id="turn-indicator" class="turn-indicator">White to move</div>
+
+        <div class="button-row">
+          <button id="btn-new" class="btn" title="New Game">
+            <span class="btn-icon">⟳</span> New Game
+          </button>
+          <button id="btn-undo" class="btn" title="Undo Move">
+            <span class="btn-icon">↩</span> Undo
+          </button>
+          <button id="btn-flip" class="btn" title="Flip Board">
+            <span class="btn-icon">⇅</span> Flip
+          </button>
+        </div>
+      </div>
+
+      <div class="side-panel">
+        <h2>Move History</h2>
+        <div id="move-history" class="move-history"></div>
+      </div>
+    </main>
+  </div>
+
+  <!-- Promotion dialog -->
+  <div id="promotion-overlay" class="overlay hidden">
+    <div class="promotion-dialog">
+      <h3>Promote pawn to:</h3>
+      <div id="promotion-choices" class="promotion-choices"></div>
+    </div>
+  </div>
+
+  <!-- Game over overlay -->
+  <div id="gameover-overlay" class="overlay hidden">
+    <div class="gameover-dialog">
+      <h3 id="gameover-title">Game Over</h3>
+      <p id="gameover-message"></p>
+      <button id="btn-gameover-new" class="btn btn-accent">New Game</button>
+    </div>
+  </div>
+
+  <!-- Thinking indicator -->
+  <div id="thinking" class="thinking hidden">
+    <div class="thinking-inner">
+      <div class="spinner"></div>
+      <span>AI is thinking…</span>
+    </div>
+  </div>
+
+  <script src="chess.js"></script>
+</body>
+</html>
