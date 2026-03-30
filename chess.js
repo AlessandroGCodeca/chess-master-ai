@@ -406,6 +406,8 @@ class ChessGame {
 }
 
 // ==================== AI ENGINE ====================
+
+// --- Piece-Square Tables (Middlegame) ---
 const PST = {
   P: [[0,0,0,0,0,0,0,0],[50,50,50,50,50,50,50,50],[10,10,20,30,30,20,10,10],[5,5,10,25,25,10,5,5],[0,0,0,20,20,0,0,0],[5,-5,-10,0,0,-10,-5,5],[5,10,10,-20,-20,10,10,5],[0,0,0,0,0,0,0,0]],
   N: [[-50,-40,-30,-30,-30,-30,-40,-50],[-40,-20,0,0,0,0,-20,-40],[-30,0,10,15,15,10,0,-30],[-30,5,15,20,20,15,5,-30],[-30,0,15,20,20,15,0,-30],[-30,5,10,15,15,10,5,-30],[-40,-20,0,5,5,0,-20,-40],[-50,-40,-30,-30,-30,-30,-40,-50]],
@@ -415,63 +417,397 @@ const PST = {
   K: [[-30,-40,-40,-50,-50,-40,-40,-30],[-30,-40,-40,-50,-50,-40,-40,-30],[-30,-40,-40,-50,-50,-40,-40,-30],[-30,-40,-40,-50,-50,-40,-40,-30],[-20,-30,-30,-40,-40,-30,-30,-20],[-10,-20,-20,-20,-20,-20,-20,-10],[20,20,0,0,0,0,20,20],[20,30,10,0,0,10,30,20]]
 };
 
+// --- Endgame King PST (centralize the king) ---
+const PST_KING_EG = [
+  [-50,-30,-30,-30,-30,-30,-30,-50],
+  [-30,-15,  0,  0,  0,  0,-15,-30],
+  [-30,  0, 15, 20, 20, 15,  0,-30],
+  [-30,  0, 20, 25, 25, 20,  0,-30],
+  [-30,  0, 20, 25, 25, 20,  0,-30],
+  [-30,  0, 15, 20, 20, 15,  0,-30],
+  [-30,-15,  0,  0,  0,  0,-15,-30],
+  [-50,-30,-30,-30,-30,-30,-30,-50]
+];
+
+// Passed pawn bonus by row (white pawn perspective: row 1 = near promo, row 6 = just advanced)
+const PASSED_PAWN_BONUS = [0, 120, 80, 50, 30, 15, 10, 0];
+
+// --- Opening Book (expanded) ---
 const OPENING_BOOK = {
   "": ["e4", "d4", "Nf3", "c4"],
-  "e4": ["e5", "c5", "e6", "c6"],
-  "e4 e5": ["Nf3", "Nc3", "f4"],
+  "e4": ["e5", "c5", "e6", "c6", "d5"],
+  "e4 e5": ["Nf3", "Nc3", "Bc4", "f4"],
   "e4 e5 Nf3": ["Nc6", "Nf6", "d6"],
-  "e4 e5 Nf3 Nc6": ["Bb4", "Bc4", "d4"],
-  "e4 c5": ["Nf3", "Nc3"],
+  "e4 e5 Nf3 Nc6": ["Bb5", "Bc4", "d4"],
+  "e4 e5 Nf3 Nc6 Bb5": ["a6", "Nf6", "d6"],
+  "e4 e5 Nf3 Nc6 Bc4": ["Nf6", "Bc5"],
+  "e4 e5 Nf3 Nf6": ["Nxe5", "Nc3", "d4"],
+  "e4 c5": ["Nf3", "Nc3", "c3"],
   "e4 c5 Nf3": ["d6", "e6", "Nc6"],
-  "d4": ["d5", "Nf6", "e6"],
+  "e4 c5 Nf3 d6": ["d4", "Bb5"],
+  "e4 c5 Nf3 Nc6": ["d4", "Bb5"],
+  "e4 c6": ["d4", "Nf3", "Nc3"],
+  "e4 c6 d4": ["d5"],
+  "e4 c6 d4 d5": ["e5", "Nc3", "exd5"],
+  "e4 e6": ["d4", "Nf3"],
+  "e4 e6 d4": ["d5"],
+  "e4 e6 d4 d5": ["Nc3", "Nd2", "e5"],
+  "e4 d5": ["exd5", "e5", "Nc3"],
+  "d4": ["d5", "Nf6", "e6", "f5"],
   "d4 d5": ["c4", "Nf3", "Bf4"],
-  "d4 Nf6": ["c4", "Nf3", "Bg5"]
+  "d4 d5 c4": ["e6", "c6", "dxc4"],
+  "d4 d5 c4 e6": ["Nc3", "Nf3"],
+  "d4 d5 Nf3": ["Nf6", "e6", "c6"],
+  "d4 Nf6": ["c4", "Nf3", "Bg5"],
+  "d4 Nf6 c4": ["e6", "g6", "c5"],
+  "d4 Nf6 c4 e6": ["Nc3", "Nf3", "g3"],
+  "d4 Nf6 c4 g6": ["Nc3", "Nf3"],
+  "d4 f5": ["c4", "Nf3", "g3"],
+  "Nf3": ["d5", "Nf6", "c5"],
+  "Nf3 Nf6": ["c4", "d4", "g3"],
+  "c4": ["e5", "Nf6", "c5"],
+  "c4 e5": ["Nc3", "g3"]
 };
 
 class ChessAI {
-  evaluate(game, usePST) {
+  constructor() {
+    this.tt = {};
+    this.ttWrites = 0;
+    this.maxTTEntries = 250000;
+    this.nodes = 0;
+  }
+
+  clearTT() {
+    this.tt = {};
+    this.ttWrites = 0;
+  }
+
+  // Game phase factor: 1.0 = full middlegame, 0.0 = pure endgame
+  _phase(game) {
+    let mat = 0;
+    for (let r = 0; r < 8; r++)
+      for (let c = 0; c < 8; c++) {
+        const p = game.board[r][c];
+        if (p && p.t !== 'K' && p.t !== 'P') mat += PIECE_VAL[p.t];
+      }
+    return Math.min(1, mat / 6200);
+  }
+
+  // King pawn shield score
+  _pawnShield(game, kr, kc, color) {
+    let shield = 0;
+    const dir = color === 'w' ? -1 : 1;
+    for (const dc of [-1, 0, 1]) {
+      const fc = kc + dc;
+      if (fc < 0 || fc > 7) continue;
+      for (let i = 1; i <= 2; i++) {
+        const fr = kr + dir * i;
+        if (fr < 0 || fr > 7) continue;
+        const p = game.board[fr][fc];
+        if (p && p.t === 'P' && p.c === color) {
+          shield += (i === 1) ? 12 : 5;
+          break;
+        }
+      }
+    }
+    return shield;
+  }
+
+  // Enhanced evaluation function
+  evaluate(game, level) {
     let score = 0;
+    const advanced = level >= 3;
+    const phase = advanced ? this._phase(game) : 1;
+
+    // Tracking arrays
+    const wPawnCols = [0,0,0,0,0,0,0,0];
+    const bPawnCols = [0,0,0,0,0,0,0,0];
+    const wPawns = [], bPawns = [];
+    let wBishops = 0, bBishops = 0;
+    const wRookCols = [], bRookCols = [];
+
     for (let r = 0; r < 8; r++)
       for (let c = 0; c < 8; c++) {
         const p = game.board[r][c];
         if (!p) continue;
-        const val = PIECE_VAL[p.t] + (usePST ? (p.c === 'w' ? PST[p.t][r][c] : PST[p.t][7-r][c]) : 0);
-        score += p.c === 'w' ? val : -val;
+        const sign = p.c === 'w' ? 1 : -1;
+
+        // Material
+        score += sign * PIECE_VAL[p.t];
+
+        // Piece-square tables
+        if (advanced) {
+          if (p.t === 'K') {
+            const mgVal = PST.K[p.c === 'w' ? r : 7 - r][c];
+            const egVal = PST_KING_EG[p.c === 'w' ? r : 7 - r][c];
+            score += sign * Math.round(mgVal * phase + egVal * (1 - phase));
+          } else {
+            score += sign * PST[p.t][p.c === 'w' ? r : 7 - r][c];
+          }
+        }
+
+        // Track pieces
+        if (advanced) {
+          if (p.t === 'P') {
+            if (p.c === 'w') { wPawnCols[c]++; wPawns.push({ r, c }); }
+            else { bPawnCols[c]++; bPawns.push({ r, c }); }
+          }
+          if (p.t === 'B') { if (p.c === 'w') wBishops++; else bBishops++; }
+          if (p.t === 'R') { if (p.c === 'w') wRookCols.push(c); else bRookCols.push(c); }
+        }
       }
+
+    if (!advanced) return score;
+
+    // === Bishop pair ===
+    if (wBishops >= 2) score += 35;
+    if (bBishops >= 2) score -= 35;
+
+    // === Pawn structure ===
+    for (let f = 0; f < 8; f++) {
+      // Doubled pawns
+      if (wPawnCols[f] > 1) score -= 15 * (wPawnCols[f] - 1);
+      if (bPawnCols[f] > 1) score += 15 * (bPawnCols[f] - 1);
+      // Isolated pawns
+      if (wPawnCols[f] > 0) {
+        const adj = (f > 0 ? wPawnCols[f - 1] : 0) + (f < 7 ? wPawnCols[f + 1] : 0);
+        if (adj === 0) score -= 20;
+      }
+      if (bPawnCols[f] > 0) {
+        const adj = (f > 0 ? bPawnCols[f - 1] : 0) + (f < 7 ? bPawnCols[f + 1] : 0);
+        if (adj === 0) score += 20;
+      }
+    }
+
+    // === Passed pawns ===
+    for (const wp of wPawns) {
+      let passed = true;
+      for (const bp of bPawns) {
+        if (Math.abs(bp.c - wp.c) <= 1 && bp.r < wp.r) { passed = false; break; }
+      }
+      if (passed) score += PASSED_PAWN_BONUS[wp.r];
+    }
+    for (const bp of bPawns) {
+      let passed = true;
+      for (const wp of wPawns) {
+        if (Math.abs(wp.c - bp.c) <= 1 && wp.r > bp.r) { passed = false; break; }
+      }
+      if (passed) score -= PASSED_PAWN_BONUS[7 - bp.r];
+    }
+
+    // === Rook on open / semi-open files ===
+    for (const c of wRookCols) {
+      if (wPawnCols[c] === 0 && bPawnCols[c] === 0) score += 25;
+      else if (wPawnCols[c] === 0) score += 12;
+    }
+    for (const c of bRookCols) {
+      if (wPawnCols[c] === 0 && bPawnCols[c] === 0) score -= 25;
+      else if (bPawnCols[c] === 0) score -= 12;
+    }
+
+    // === King safety (middlegame) ===
+    if (phase > 0.4) {
+      const wk = game.findKing('w');
+      const bk = game.findKing('b');
+      if (wk) score += this._pawnShield(game, wk[0], wk[1], 'w') * phase;
+      if (bk) score -= this._pawnShield(game, bk[0], bk[1], 'b') * phase;
+    }
+
     return score;
   }
 
-  orderMoves(game, moves) {
+  // MVV-LVA move ordering with TT hash move priority
+  _orderMoves(game, moves, hashMove) {
     return moves.sort((a, b) => {
-      const capA = game.board[a.tr][a.tc] ? PIECE_VAL[game.board[a.tr][a.tc].t] : 0;
-      const capB = game.board[b.tr][b.tc] ? PIECE_VAL[game.board[b.tr][b.tc].t] : 0;
-      return capB - capA;
+      // Hash move always first
+      if (hashMove) {
+        const aHash = a.fr === hashMove.fr && a.fc === hashMove.fc && a.tr === hashMove.tr && a.tc === hashMove.tc;
+        const bHash = b.fr === hashMove.fr && b.fc === hashMove.fc && b.tr === hashMove.tr && b.tc === hashMove.tc;
+        if (aHash) return -1;
+        if (bHash) return 1;
+      }
+      // Promotions high priority
+      const promoA = a.promo ? PIECE_VAL[a.promo] : 0;
+      const promoB = b.promo ? PIECE_VAL[b.promo] : 0;
+      // MVV-LVA: capture value = victim value * 10 - attacker value
+      const capA = game.board[a.tr][a.tc];
+      const capB = game.board[b.tr][b.tc];
+      const pieceA = game.board[a.fr][a.fc];
+      const pieceB = game.board[b.fr][b.fc];
+      const scoreA = (capA ? PIECE_VAL[capA.t] * 10 - PIECE_VAL[pieceA.t] : 0) + promoA;
+      const scoreB = (capB ? PIECE_VAL[capB.t] * 10 - PIECE_VAL[pieceB.t] : 0) + promoB;
+      return scoreB - scoreA;
     });
   }
 
-  minimax(game, depth, alpha, beta, maximizing, usePST) {
-    if (depth === 0) return this.evaluate(game, usePST);
-    const moves = game.allLegalMoves();
-    if (moves.length === 0) {
-      if (game.inCheck(game.turn)) return maximizing ? -99999 + (100 - depth) : 99999 - (100 - depth);
-      return 0;
-    }
-    this.orderMoves(game, moves);
+  // Quiescence search: resolve tactical sequences to avoid horizon effect
+  quiescence(game, alpha, beta, maximizing, level, qDepth) {
+    this.nodes++;
+
+    // Stand pat evaluation
+    const standPat = this.evaluate(game, level);
+
+    // Depth limit to avoid runaway searches
+    if (qDepth <= 0) return standPat;
+
     if (maximizing) {
-      let best = -Infinity;
-      for (const m of moves) {
-        game.makeMove(m); best = Math.max(best, this.minimax(game, depth-1, alpha, beta, false, usePST)); game.undoMove();
-        alpha = Math.max(alpha, best); if (beta <= alpha) break;
-      }
-      return best;
+      if (standPat >= beta) return beta;
+      if (standPat > alpha) alpha = standPat;
     } else {
-      let best = Infinity;
-      for (const m of moves) {
-        game.makeMove(m); best = Math.min(best, this.minimax(game, depth-1, alpha, beta, true, usePST)); game.undoMove();
-        beta = Math.min(beta, best); if (beta <= alpha) break;
-      }
-      return best;
+      if (standPat <= alpha) return alpha;
+      if (standPat < beta) beta = standPat;
     }
+
+    // Generate only captures and promotions
+    const allMoves = game.allLegalMoves();
+    const captures = allMoves.filter(m => game.board[m.tr][m.tc] || m.ep || m.promo);
+    if (captures.length === 0) return standPat;
+
+    this._orderMoves(game, captures, null);
+
+    for (const m of captures) {
+      // Delta pruning: skip if capture can't possibly raise score enough
+      const capVal = game.board[m.tr][m.tc] ? PIECE_VAL[game.board[m.tr][m.tc].t] : 0;
+      const promoVal = m.promo ? PIECE_VAL[m.promo] - PIECE_VAL.P : 0;
+      if (maximizing && standPat + capVal + promoVal + 200 < alpha) continue;
+      if (!maximizing && standPat - capVal - promoVal - 200 > beta) continue;
+
+      game.makeMove(m);
+      const score = this.quiescence(game, alpha, beta, !maximizing, level, qDepth - 1);
+      game.undoMove();
+
+      if (maximizing) {
+        if (score > alpha) alpha = score;
+        if (alpha >= beta) return beta;
+      } else {
+        if (score < beta) beta = score;
+        if (alpha >= beta) return alpha;
+      }
+    }
+
+    return maximizing ? alpha : beta;
+  }
+
+  // TT store with size management
+  _ttStore(hash, depth, score, flag, bestMove) {
+    const existing = this.tt[hash];
+    // Replace if deeper or same depth
+    if (!existing || existing.depth <= depth) {
+      if (!existing) this.ttWrites++;
+      this.tt[hash] = { depth, score, flag, bestMove };
+      // Simple cleanup if too large
+      if (this.ttWrites > this.maxTTEntries) {
+        this.tt = {};
+        this.ttWrites = 0;
+      }
+    }
+  }
+
+  // Enhanced minimax with alpha-beta, TT, null move pruning, and quiescence
+  minimax(game, depth, alpha, beta, maximizing, level, doNull) {
+    this.nodes++;
+
+    const origAlpha = alpha;
+
+    // Transposition table lookup
+    const hash = game._posHash();
+    const ttEntry = this.tt[hash];
+    if (ttEntry && ttEntry.depth >= depth) {
+      if (ttEntry.flag === 'exact') return ttEntry.score;
+      if (ttEntry.flag === 'lower' && ttEntry.score > alpha) alpha = ttEntry.score;
+      if (ttEntry.flag === 'upper' && ttEntry.score < beta) beta = ttEntry.score;
+      if (alpha >= beta) return ttEntry.score;
+    }
+
+    // Leaf node: drop into quiescence search
+    if (depth <= 0) return this.quiescence(game, alpha, beta, maximizing, level, 8);
+
+    const inCheck = game.inCheck(game.turn);
+    const moves = game.allLegalMoves();
+
+    if (moves.length === 0) {
+      if (inCheck) return maximizing ? -99999 + (100 - depth) : 99999 - (100 - depth);
+      return 0; // stalemate
+    }
+
+    // Check extension: search one ply deeper when in check
+    if (inCheck) depth++;
+
+    // Null move pruning (skip our turn; if still good, prune)
+    // Only for levels 4+, not in check, and we have non-pawn material
+    if (doNull && depth >= 3 && level >= 4 && !inCheck) {
+      let hasNonPawn = false;
+      outer: for (let r = 0; r < 8; r++)
+        for (let c = 0; c < 8; c++) {
+          const p = game.board[r][c];
+          if (p && p.c === game.turn && p.t !== 'K' && p.t !== 'P') { hasNonPawn = true; break outer; }
+        }
+
+      if (hasNonPawn) {
+        const savedTurn = game.turn;
+        const savedEP = game.enPassant;
+        game.turn = game.turn === 'w' ? 'b' : 'w';
+        game.enPassant = null;
+
+        const R = depth >= 6 ? 3 : 2;
+        const nullScore = this.minimax(game, depth - 1 - R, alpha, beta, !maximizing, level, false);
+
+        game.turn = savedTurn;
+        game.enPassant = savedEP;
+
+        if (maximizing && nullScore >= beta) return beta;
+        if (!maximizing && nullScore <= alpha) return alpha;
+      }
+    }
+
+    // Move ordering: hash move first, then MVV-LVA
+    const hashMove = ttEntry ? ttEntry.bestMove : null;
+    this._orderMoves(game, moves, hashMove);
+
+    let bestMove = moves[0];
+    let bestScore = maximizing ? -Infinity : Infinity;
+
+    for (let i = 0; i < moves.length; i++) {
+      const m = moves[i];
+      const isCapture = !!game.board[m.tr][m.tc] || m.ep;
+      const isQuiet = !isCapture && !m.promo && !m.castle;
+      game.makeMove(m);
+
+      let score;
+      // Late move reduction for quiet moves (level 5 only)
+      if (level >= 5 && i >= 4 && depth >= 3 && !inCheck &&
+          isQuiet && !game.inCheck(game.turn)) {
+        // Search with reduced depth first
+        score = this.minimax(game, depth - 2, alpha, beta, !maximizing, level, true);
+        // Re-search at full depth if promising
+        if (maximizing ? score > alpha : score < beta) {
+          score = this.minimax(game, depth - 1, alpha, beta, !maximizing, level, true);
+        }
+      } else {
+        score = this.minimax(game, depth - 1, alpha, beta, !maximizing, level, true);
+      }
+
+      game.undoMove();
+
+      if (maximizing) {
+        if (score > bestScore) { bestScore = score; bestMove = m; }
+        alpha = Math.max(alpha, score);
+        if (alpha >= beta) break;
+      } else {
+        if (score < bestScore) { bestScore = score; bestMove = m; }
+        beta = Math.min(beta, score);
+        if (alpha >= beta) break;
+      }
+    }
+
+    // Store in transposition table
+    let flag;
+    if (bestScore <= origAlpha) flag = 'upper';
+    else if (maximizing ? bestScore >= beta : bestScore <= alpha) flag = 'lower';
+    else flag = 'exact';
+    this._ttStore(hash, depth, bestScore, flag, bestMove);
+
+    return bestScore;
   }
 
   getBestMove(game, difficulty, moveLog = []) {
@@ -484,7 +820,6 @@ class ChessAI {
       if (OPENING_BOOK[historyStr]) {
         const options = OPENING_BOOK[historyStr];
         const pick = options[Math.floor(Math.random() * options.length)];
-        // Find matching move obj
         const match = moves.find(m => {
           const san = game.moveNotation(m);
           return san.replace(/[+#]/g, '') === pick;
@@ -492,7 +827,11 @@ class ChessAI {
         if (match) return match;
       }
     }
+
+    // Level 1: Random
     if (difficulty === 1) return moves[Math.floor(Math.random() * moves.length)];
+
+    // Level 2: Greedy captures
     if (difficulty === 2) {
       const captures = moves.filter(m => game.board[m.tr][m.tc] || m.ep);
       if (captures.length > 0) {
@@ -505,19 +844,39 @@ class ChessAI {
       }
       return moves[Math.floor(Math.random() * moves.length)];
     }
-    const config = { 3: { depth: 2, pst: false }, 4: { depth: 3, pst: true }, 5: { depth: 4, pst: true } };
-    const { depth, pst } = config[difficulty] || config[3];
+
+    // Levels 3-5: Full search with increasing strength
+    //   3 — Depth 3 + quiescence + PST
+    //   4 — Depth 3 + quiescence + full eval + null move pruning
+    //   5 — Depth 4 + quiescence + full eval + null move + check extensions
+    const config = {
+      3: { depth: 3, nullMove: false },
+      4: { depth: 3, nullMove: true },
+      5: { depth: 4, nullMove: true }
+    };
+    const cfg = config[difficulty] || config[3];
+
+    this.nodes = 0;
+    this.clearTT();
+
     const maximizing = game.turn === 'w';
     let bestScore = maximizing ? -Infinity : Infinity;
     let bestMoves = [];
-    this.orderMoves(game, moves);
+
+    this._orderMoves(game, moves, null);
+
     for (const m of moves) {
       game.makeMove(m);
-      const score = this.minimax(game, depth-1, -Infinity, Infinity, !maximizing, pst);
+      const score = this.minimax(game, cfg.depth - 1, -Infinity, Infinity, !maximizing, difficulty, cfg.nullMove);
       game.undoMove();
-      if ((maximizing && score > bestScore) || (!maximizing && score < bestScore)) { bestScore = score; bestMoves = [m]; }
-      else if (score === bestScore) bestMoves.push(m);
+      if ((maximizing && score > bestScore) || (!maximizing && score < bestScore)) {
+        bestScore = score;
+        bestMoves = [m];
+      } else if (score === bestScore) {
+        bestMoves.push(m);
+      }
     }
+
     return bestMoves[Math.floor(Math.random() * bestMoves.length)];
   }
 }
